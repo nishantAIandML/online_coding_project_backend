@@ -1,127 +1,22 @@
 import { Submission } from "../models/submission.models.js";
-import { Runcode } from "../compiler/runCode.js";
 import { Problem } from "../models/problem.models.js";
 import { User } from "../models/user.models.js";
 import axios from "axios";
-export const createSubmission = async (req, res) => {
-  try {
-    console.log(req.user);
-    if (!req.user || !req.user.id) {
-      return res
-        .status(401)
-        .json({ success: false, message: "Unauthorized: No user found" });
-    }
-    const userId = req.user.id;
-    const { problemId, code, language } = req.body; // Now userId comes from JSON
 
-    // 1️⃣ Find the problem
-    const problem = await Problem.findById(problemId);
-    if (!problem) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Problem not found" });
-    }
-
-    // 2️⃣ Merge test cases
-    const allTestCases = [
-      ...problem.publicTestCases,
-      ...problem.hiddenTestCases,
-    ];
-
-    if (allTestCases.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "No test cases found for this problem.",
-      });
-    }
-
-    let passedCount = 0;
-    const results = [];
-
-    // 3️⃣ Run code for each test case
-    for (const testCase of allTestCases) {
-      try {
-        // Example: sending to an external compiler API
-        const response = await axios.post(
-          "http://localhost:3000/api/v1/submissions/compile",
-          {
-            language,
-            code,
-            stdin: testCase.input,
-          }
-        );
-
-        const userOutput = response.data.output.trim();
-        const expectedOutput = testCase.output.trim();
-
-        const passed = userOutput === expectedOutput;
-        if (passed) passedCount++;
-
-        results.push({
-          input: testCase.input,
-          expectedOutput,
-          userOutput,
-          passed,
-        });
-      } catch (err) {
-        results.push({
-          input: testCase.input,
-          error: err.message,
-          passed: false,
-        });
-      }
-    }
-
-    // 4️⃣ Save submission
-    const submission = await Submission.create({
-      problem: problemId, // Assuming your schema has `problem` as ref
-      user: userId, // Now we store from JSON
-      code,
-      language,
-      results,
-      score:
-        passedCount === allTestCases.length ? Number(problem?.score) || 0 : 0,
-      status: passedCount === allTestCases.length ? "Accepted" : "Wrong Answer",
-    });
-
-    if (passedCount === allTestCases.length) {
-      const user = await User.findById(userId);
-      if (user && !user.problemsSolved.includes(problemId)) {
-        user.problemsSolved.push(problemId);
-        user.totalScore += Number(problem?.score) || 0;
-        await user.save();
-      }
-    }
-    // 5️⃣ Return response
-    res.json({
-      success: true,
-      totalCases: allTestCases.length,
-      passedCases: passedCount,
-      results,
-      score: submission.score,
-    });
-  } catch (err) {
-    console.error(err);
-    res
-      .status(500)
-      .json({ success: false, message: "Server error", error: err.message });
-  }
-};
 
 export const compileProblem = async (req, res) => {
-  const { code, language, stdin } = req.body;
-
-  if (!code || !language) {
-    return res.status(400).json({ message: "Code and language are required" });
-  }
+  const { code, language, input } = req.body;
 
   try {
-    // Pass stdin if available
-    const output = await Runcode(language, code, stdin || "");
+    const response = await axios.post("http://localhost:3001/api/v1/compiler/execute", {
+      code,
+      language,
+      input
+    });
 
     return res.status(200).json({
       success: true,
-      output: output.trim(),
+      output: response.data.output.trim(),
     });
   } catch (error) {
     console.error("Compilation error:", error);
@@ -180,3 +75,82 @@ export const aiReviewController = async (req, res) => {
     });
   }
 };
+
+
+// Normalize outputs for comparison
+export const createSubmission = async(req,res) => {
+  const { problemId, code, language } = req.body;
+  const userId = req.user?.id; // Get user ID from auth middleware
+  
+  if (!problemId || !code || !language) {
+    return res.status(400).json({
+      success: false,
+      message: "Missing required fields: problemId, code, or language"
+    });
+  }
+
+  // Optional: Add user validation if you want to require authentication
+  // if (!userId) {
+  //   return res.status(401).json({
+  //     success: false,
+  //     message: "User not authenticated"
+  //   });
+  // }
+
+  try {
+    const problem = await Problem.findById(problemId);
+    if (!problem) {
+      return res.status(404).json({
+        success: false,
+        message: "Problem not found"
+      });
+    }
+
+    const testcases = problem.hiddenTestCases;
+    const l = [];
+    for(let i = 0; i < testcases.length; i++) {
+      l.push({input: testcases[i].input, output: testcases[i].output});
+    }
+
+    const response = await axios.post("http://localhost:3001/api/v1/compiler/execute-tests", {
+      code,
+      language,
+      testCases: l,
+    });
+
+    
+
+    // Save submission to database
+    const submission = await Submission.create({
+      user:userId,
+      problem:problemId,
+      code,
+      language,
+      status: response.data.summary.passed === response.data.summary.total ? "Accepted" : "Wrong Answer"
+    });
+
+    const user=await User.findById(userId);
+    if(user.problemsSolved.includes(problemId)===false && response.data.summary.passed===response.data.summary.total){
+      user.totalScore+=problem.score;
+      user.problemsSolved.push(problemId);
+      await user.save();
+    }
+
+    return res.json({
+      success: true,
+      testCasesPassed: response.data.summary.passed,
+      totalTestCases: response.data.summary.total,
+      status: response.data.summary.passed === response.data.summary.total ? "Accepted" : "Wrong Answer",
+      userId: userId || null, // Include user ID if available
+    });
+  } catch (error) {
+    console.error("Error creating submission:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error processing submission",
+      error: error.message
+    });
+  }
+};
+
+

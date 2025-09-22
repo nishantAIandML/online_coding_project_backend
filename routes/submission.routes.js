@@ -3,7 +3,7 @@ import { createSubmission,compileProblem,aiReviewController} from "../controller
 import {authMiddleware} from "../middleware/auth.middleware.js";
 const router = express.Router();
 
-router.post("/", authMiddleware,createSubmission);
+router.post("/",authMiddleware,createSubmission);
 router.post("/compile",compileProblem);
 router.post("/ai-review", aiReviewController);
 export {router};

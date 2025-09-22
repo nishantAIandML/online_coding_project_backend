@@ -32,7 +32,7 @@ const loginUser = async (req, res) => {
     // secure: true,
     secure:true, // use true in production with HTTPS
     sameSite: "none",
-    maxAge: 15 * 60 * 1000, // 15 minutes
+    maxAge: 60 * 60 * 1000, // 1 hour
   });
 
   res.cookie("refreshToken", refreshToken, {

@@ -15,7 +15,6 @@ const problemSchema = new Schema(
     tags: [{ type: String }],
     constraints: { type: String },
 
-    publicTestCases: [testCaseSchema],
     hiddenTestCases: [testCaseSchema],
 
     solution: { type: String },
